@@ -1,0 +1,4 @@
+# Keep shell scripts LF even when core.autocrlf=true (CRLF breaks bash); batch files CRLF.
+*.sh  text eol=lf
+*.bat text eol=crlf
+Dockerfile text eol=lf

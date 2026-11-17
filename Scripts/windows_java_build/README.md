@@ -74,7 +74,7 @@ a Mac or the GitHub workflows below. Output: `$BUILDROOT/java-dist` and `rdkit-m
 | `java_native_macos_arm64.yml` | macos-15 | `build-macos.sh` (Boost cached) |
 | `java_native_macos_x86_64.yml` | macos-15-intel | `build-macos.sh` (Boost cached) |
 | `java_api.yml` | ubuntu-latest | calls the four above, diffs the public API of the four jars, smoke-tests the common jar against the Linux `.so`, uploads `rdkit-java-api`, optionally publishes to JFrog |
-| `wasm_minimallib.yml` | ubuntu-24.04 | `build-wasm.sh` (Emscripten in Docker, runs the MinimalLib JS tests); artifact `rdkit-wasm`; not part of `java_api.yml` |
+| `wasm_minimallib.yml` | ubuntu-24.04 | `build-wasm.sh` (Emscripten in Docker, runs the MinimalLib JS tests); artifact `rdkit-wasm`; optional `publish` input; not part of `java_api.yml` |
 
 None runs automatically: start them from **Actions > Run workflow** (or call them with `workflow_call`).
 Each native workflow uploads `rdkit-<platform>` (`java-dist/` with the jar and native library, plus the
@@ -86,6 +86,11 @@ Each native workflow uploads `rdkit-<platform>` (`java-dist/` with the jar and n
 `JFROG_USERNAME` and `JFROG_ACCESS_TOKEN`; the target defaults to certara-maven-develop-local and can be
 changed with the repository variable `JFROG_MAVEN_URL`. It runs `publish-jfrog.sh`, so a CI publish has the
 same layout as a local one (macOS classifiers are included because the workflow builds them).
+
+`wasm_minimallib.yml` has the same `publish` / `version` inputs and secrets. It runs `publish-jfrog-wasm.sh`,
+which publishes `org.rdkit:rdkit-minimallib:<version>` to the same repository: the build folder as a zip, plus
+the `js`, `wasm` and `types` (`.d.ts`) files as classifiers. Locally: `build-wasm.bat`, then
+`bash publish-jfrog-wasm.sh` (`DRY_RUN=1` to preview).
 
 ## Caveats
 * **GraphMolWrap.dll only loads on JDK 21+.** It is built with MSVC 14.5x; JDK 17 bundles

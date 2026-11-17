@@ -7,11 +7,35 @@ name: WASM_MinimalLib
 # (zlib 1.3.2 + the floating "latest" emsdk fails to link zlib's test target otherwise).
 # Artifact: rdkit-wasm (the contents of Code/MinimalLib/build: dist/ plus package.json).
 #
+# Optionally publishes to JFrog (certara-maven-develop-local) as org.rdkit:rdkit-minimallib:<version>:
+# a zip of the package folder plus the js / wasm / types files as classifiers (publish-jfrog-wasm.sh).
+#
 # This is separate from the Java workflows: it has no JNI/Java part, and no InChI by default.
 # Run it by hand (Actions > Run workflow) or call it from another workflow.
 on:
-  workflow_call:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to JFrog (needs JFROG_USERNAME / JFROG_ACCESS_TOKEN secrets)
+        type: boolean
+        default: false
+      version:
+        description: Maven version to publish (empty = RDKit version from CMakeLists.txt, e.g. 2026.09.2)
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      publish:
+        type: boolean
+        default: false
+      version:
+        type: string
+        default: ""
+    secrets:
+      JFROG_USERNAME:
+        required: false
+      JFROG_ACCESS_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -50,3 +74,29 @@ jobs:
           path: ${{ runner.temp }}/rdkit/wasm/build
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish to JFrog
+        if: ${{ inputs.publish }}
+        env:
+          BUILDROOT: ${{ runner.temp }}/rdkit
+          VERSION: ${{ inputs.version }}
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+          JFROG_URL: ${{ vars.JFROG_MAVEN_URL || 'https://certara.jfrog.io/artifactory/certara-maven-develop-local' }}
+          JFROG_REPO_ID: certara-jfrog-admin
+        run: |
+          [ -n "$JFROG_USERNAME" ] && [ -n "$JFROG_ACCESS_TOKEN" ]             || { echo "::error::secrets JFROG_USERNAME and JFROG_ACCESS_TOKEN are required to publish"; exit 1; }
+          mkdir -p ~/.m2
+          # credentials are read from the environment at deploy time, never written to disk
+          cat > ~/.m2/settings.xml <<'EOF'
+          <settings>
+            <servers>
+              <server>
+                <id>certara-jfrog-admin</id>
+                <username>${env.JFROG_USERNAME}</username>
+                <password>${env.JFROG_ACCESS_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+          bash Scripts/windows_java_build/publish-jfrog-wasm.sh

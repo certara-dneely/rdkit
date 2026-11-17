@@ -4,10 +4,32 @@ name: Java_Native_Windows_x64
 # org.RDKit.jar produced alongside it, using the scripts in Scripts/windows_java_build
 # (MSVC + Ninja + vcpkg static Boost). Artifact: rdkit-windows-x64.
 #
+# Optional signing (input "sign"): the DLL is Authenticode-signed by the Certara Jenkins CodeSigning job
+# (Scripts/windows_java_build/sign-windows.ps1) before the smoke test, so the smoke test, the install zip and
+# the artifact all hold the signed file. See Scripts/windows_java_build/README.md for the secrets/variables.
+#
 # Run it by hand (Actions > Run workflow) or call it from java_api.yml.
 on:
-  workflow_call:
   workflow_dispatch:
+    inputs:
+      sign:
+        description: Authenticode-sign GraphMolWrap.dll through the Certara Jenkins CodeSigning job
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      sign:
+        type: boolean
+        default: false
+    secrets:
+      JFROG_ACCESS_TOKEN:
+        required: false
+      D360_CODE_SIGN_TRIGGER:
+        required: false
+      D360_JENKINS_API_USERID:
+        required: false
+      D360_JENKINS_API_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -88,6 +110,28 @@ jobs:
       - name: Build and install
         shell: cmd
         run: call Scripts\windows_java_build\build.bat
+
+      - uses: jfrog/setup-jfrog-cli@v4
+        if: ${{ inputs.sign }}
+        env:
+          JF_URL: https://certara.jfrog.io
+          JF_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+
+      - name: Sign DLLs (Jenkins CodeSigning)
+        if: ${{ inputs.sign }}
+        shell: pwsh
+        env:
+          JENKINS_BASE_URL: ${{ vars.JENKINS_BASE_URL }}
+          JENKINS_CODESIGN_JOB: ${{ vars.JENKINS_CODESIGN_JOB }}
+          CODESIGN_TRIGGER_TOKEN: ${{ secrets.D360_CODE_SIGN_TRIGGER }}
+          JENKINS_API_USERID: ${{ secrets.D360_JENKINS_API_USERID }}
+          JENKINS_API_TOKEN: ${{ secrets.D360_JENKINS_API_TOKEN }}
+        run: |
+          ./Scripts/windows_java_build/sign-windows.ps1 `
+            -Root "$env:BUILDROOT\java-dist", "$env:BUILDROOT\install" `
+            -BuildNumber "${{ github.run_id }}-${{ github.run_attempt }}" `
+            -Label rdkit-windows-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Smoke test (JDK 21)
         shell: pwsh

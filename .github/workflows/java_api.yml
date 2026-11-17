@@ -11,6 +11,10 @@ name: Java_API
 #        plain jar = common jar; classifiers windows-x64 / linux-x86_64 / macos-arm64 / macos-x86_64, each with
 #        a jar, the native library (dll / so / dylib) and an *-install archive (C++ libs + headers).
 #
+# Signing (input "sign"): the Windows DLL is Authenticode-signed and the macOS libraries are signed and
+# notarized by the native workflows (see Scripts/windows_java_build/README.md for the secrets). The Linux
+# library and the jars are not signed.
+#
 # Why a "common" jar must be chosen: C++ `long` is 32-bit on Windows and 64-bit on Linux, so SWIG generates
 # `int use_count()` vs `long use_count()` (and a few differently named opaque SWIGTYPE_p_* classes) per platform.
 # Windows' variant is the safe default (an `int` signature works against every native library), but code
@@ -32,12 +36,19 @@ on:
         description: Maven version to publish (empty = RDKit version from CMakeLists.txt, e.g. 2026.09.2)
         type: string
         default: ""
+      sign:
+        description: Sign the native libraries (Windows DLL via Jenkins CodeSigning; macOS dylibs with Developer ID + notarization)
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       jar_platform:
         type: string
         default: windows-x64
       publish:
+        type: boolean
+        default: false
+      sign:
         type: boolean
         default: false
       version:
@@ -48,6 +59,22 @@ on:
         required: false
       JFROG_ACCESS_TOKEN:
         required: false
+      D360_CODE_SIGN_TRIGGER:
+        required: false
+      D360_JENKINS_API_USERID:
+        required: false
+      D360_JENKINS_API_TOKEN:
+        required: false
+      MACOS_CERT_P12_BASE64:
+        required: false
+      MACOS_CERT_PASSWORD:
+        required: false
+      NOTARY_APPLE_ID:
+        required: false
+      NOTARY_PASSWORD:
+        required: false
+      NOTARY_TEAM_ID:
+        required: false
 
 permissions:
   contents: read
@@ -55,12 +82,21 @@ permissions:
 jobs:
   windows_x64:
     uses: ./.github/workflows/java_native_windows_x64.yml
+    with:
+      sign: ${{ inputs.sign }}
+    secrets: inherit
   linux_x86_64:
     uses: ./.github/workflows/java_native_linux_x86_64.yml
   macos_arm64:
     uses: ./.github/workflows/java_native_macos_arm64.yml
+    with:
+      sign: ${{ inputs.sign }}
+    secrets: inherit
   macos_x86_64:
     uses: ./.github/workflows/java_native_macos_x86_64.yml
+    with:
+      sign: ${{ inputs.sign }}
+    secrets: inherit
 
   assemble:
     needs: [windows_x64, linux_x86_64, macos_arm64, macos_x86_64]

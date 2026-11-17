@@ -92,6 +92,26 @@ which publishes `org.rdkit:rdkit-minimallib:<version>` to the same repository: t
 the `js`, `wasm` and `types` (`.d.ts`) files as classifiers. Locally: `build-wasm.bat`, then
 `bash publish-jfrog-wasm.sh` (`DRY_RUN=1` to preview).
 
+### Code signing (`sign` input, off by default)
+`java_api.yml` and the Windows/macOS native workflows have a `sign` input (Actions > Run workflow). The Linux
+library and the jars are not signed.
+
+* **Windows** (`sign-windows.ps1`): `GraphMolWrap.dll` is Authenticode-signed by the Certara Jenkins CodeSigning
+  job, the same flow as `d360-tripos-tools/.github/scripts/sign-and-fetch.ps1`: the unsigned files go to
+  Artifactory staging as a tar, the Jenkins webhook starts the job, the signed tar is fetched, every signature
+  is checked (`Get-AuthenticodeSignature` = Valid) and the files are copied back before the smoke test and
+  packaging. The Jenkins host is not in the repository (it is public): set the repository **variables**
+  `JENKINS_BASE_URL` and `JENKINS_CODESIGN_JOB` (e.g. `/job/products/job/D360/job/CodeSigning`) and the
+  **secrets** `D360_CODE_SIGN_TRIGGER` (webhook token), `JFROG_ACCESS_TOKEN` (also used for publishing) and,
+  recommended, `D360_JENKINS_API_USERID` + `D360_JENKINS_API_TOKEN` (without them it polls Artifactory).
+* **macOS** (`sign-macos.sh`, `notarize-macos.sh`): all `.dylib`s (the JNI library and the install tree) are
+  signed with the Developer ID certificate (hardened runtime + secure timestamp) inside `build-macos.sh`
+  (`SIGN_IDENTITY` env), so the smoke test and the tarball see signed files; they are then notarized with
+  `notarytool`. Secrets: `MACOS_CERT_P12_BASE64` (the Developer ID Application certificate + private key
+  exported as .p12, base64), `MACOS_CERT_PASSWORD` (the .p12 password), `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`
+  (app-specific password) and `NOTARY_TEAM_ID`. Optional variable `MACOS_SIGN_IDENTITY` (default
+  `Certara USA, Inc.`). Bare dylibs cannot be stapled, Gatekeeper looks the ticket up online.
+
 ## Caveats
 * **GraphMolWrap.dll only loads on JDK 21+.** It is built with MSVC 14.5x; JDK 17 bundles
   VC++ runtime 14.27 in its `bin\` and that older copy shadows the system one, so the DLL

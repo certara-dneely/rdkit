@@ -16,7 +16,8 @@
 # gate, like the glibc check on Linux).
 #
 # Optional env: BUILDROOT, BOOST_VERSION (1.92.0), BOOST_PREFIX, DEPLOYMENT_TARGET (12.0), JOBS,
-#               FREETYPE (OFF), SKIP_SMOKE=1
+#               FREETYPE (OFF), SKIP_SMOKE=1,
+#               SIGN_IDENTITY (+ KEYCHAIN): code-sign the libraries (see sign-macos.sh, notarize-macos.sh)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -96,6 +97,14 @@ NATIVE="$(ls "$GM"/libGraphMolWrap.dylib "$GM"/libGraphMolWrap.jnilib "$GM"/libG
   || true
 [ -n "$NATIVE" ] || die "no libGraphMolWrap.* found in $GM"
 cp "$NATIVE" "$DIST_DIR/libGraphMolWrap.dylib"
+
+# --- optional code signing (before the gate, smoke test and tarball, so all of them see the signed files) ---------
+# Needs SIGN_IDENTITY (and KEYCHAIN if the identity is not in the default search list). Notarization is a
+# separate, later step (notarize-macos.sh): it does not change the files.
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  echo "Signing libraries as '$SIGN_IDENTITY'"
+  bash "$HERE/sign-macos.sh" "$DIST_DIR" "$INSTALL_DIR/lib"
+fi
 
 # --- portability gate: only system libraries (or RDKit's own, via @rpath) allowed ------------------------------------------------
 check_deps() {

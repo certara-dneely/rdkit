@@ -28,7 +28,7 @@ First run takes ~20-30 min. `build-wasm.sh` exports the **committed** source (gi
 line endings and runs RDKit's own `Code/MinimalLib/scripts/build_rdkitjs.sh` on that copy, so
 uncommitted changes are not included, and nothing is written into your source tree. The package
 version is derived from `CMakeLists.txt` the same way RDKit's CI does (e.g. `2026.9.2`).
-MinimalLib has no Java API and no InChI by default.
+MinimalLib has no Java API. It is built with InChI (`get_inchi`, `get_inchikey_for_inchi`).
 
 `build-wasm.sh` also patches the *staged* `01_deps.Dockerfile` (not your repo) to add
 `-DZLIB_BUILD_TESTING=OFF`: the upstream Dockerfile passes the obsolete `ZLIB_BUILD_EXAMPLES=OFF`

@@ -10,7 +10,7 @@ name: WASM_MinimalLib
 # Optionally publishes to JFrog (certara-maven-develop-local) as org.rdkit:rdkit-minimallib:<version>:
 # a zip of the package folder plus the js / wasm / types files as classifiers (publish-jfrog-wasm.sh).
 #
-# This is separate from the Java workflows: it has no JNI/Java part, and no InChI by default.
+# This is separate from the Java workflows: it has no JNI/Java part (InChI is included).
 # Run it by hand (Actions > Run workflow) or call it from another workflow.
 on:
   workflow_dispatch:

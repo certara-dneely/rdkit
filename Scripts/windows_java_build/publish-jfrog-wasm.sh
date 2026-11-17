@@ -51,7 +51,7 @@ cat > "$POM" <<POMEOF
   <version>$VERSION</version>
   <packaging>zip</packaging>
   <name>RDKit MinimalLib (WebAssembly / JavaScript)</name>
-  <description>RDKit $VERSION MinimalLib compiled to WebAssembly with Emscripten, built from the Certara fork. The zip is the npm-style package folder (dist/ with RDKit_minimal.js, .wasm and .d.ts, plus package.json); the js, wasm and types classifiers are the individual files. No InChI.</description>
+  <description>RDKit $VERSION MinimalLib compiled to WebAssembly with Emscripten, built from the Certara fork. The zip is the npm-style package folder (dist/ with RDKit_minimal.js, .wasm and .d.ts, plus package.json); the js, wasm and types classifiers are the individual files. Includes InChI.</description>
   <url>https://github.com/rdkit/rdkit</url>
   <licenses><license><name>BSD 3-Clause</name><url>https://github.com/rdkit/rdkit/blob/master/license.txt</url></license></licenses>
 </project>

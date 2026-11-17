@@ -1,0 +1,122 @@
+name: Java_Native_Windows_x64
+
+# Builds the Windows x64 native code (C++ libraries + libGraphMolWrap JNI library, with InChI) and the
+# org.RDKit.jar produced alongside it, using the scripts in Scripts/windows_java_build
+# (MSVC + Ninja + vcpkg static Boost). Artifact: rdkit-windows-x64.
+#
+# Run it by hand (Actions > Run workflow) or call it from java_api.yml.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows_x64:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      # The jar is compiled with JDK 17 (bytecode usable on Java 17+). GraphMolWrap.dll is built with a
+      # current MSVC runtime and only LOADS on JDK 21+ (JDK 17 bundles an older VC++ runtime), so the
+      # smoke test runs on 21.
+      - name: Set up JDK 17 (compiles the jar)
+        id: jdk17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up JDK 21 (runs the smoke test)
+        id: jdk21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set build environment
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'rdkit'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          if (-not $vs) { throw 'Visual Studio not found' }
+          New-Item -ItemType Directory -Force "$root\vcpkg-cache" | Out-Null
+          @(
+            "BUILDROOT=$root",
+            "RDKIT_VCPKG=$root\vcpkg",
+            "VCPKG_DEFAULT_BINARY_CACHE=$root\vcpkg-cache",
+            "VSROOT=$vs",
+            "RDKIT_JDK=${{ steps.jdk17.outputs.path }}",
+            "JDK21=${{ steps.jdk21.outputs.path }}"
+          ) | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # vcpkg binary packages (static Boost) are content-addressed, so a stale cache can only miss.
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-bin-${{ runner.os }}-${{ hashFiles('Scripts/windows_java_build/setup-deps.bat') }}
+          restore-keys: vcpkg-bin-${{ runner.os }}-
+
+      - name: Install SWIG
+        shell: pwsh
+        run: |
+          choco install swig --no-progress -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $swig = Get-ChildItem 'C:\ProgramData\chocolatey\lib\swig' -Recurse -Filter swig.exe | Select-Object -First 1
+          if (-not $swig) { throw 'swig.exe not found after install' }
+          "SWIGDIR=$($swig.DirectoryName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          & $swig.FullName -version
+
+      - name: "Install dependencies (vcpkg: Boost, FreeType)"
+        shell: cmd
+        run: call Scripts\windows_java_build\setup-deps.bat
+
+      - name: Save vcpkg binary cache
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-bin-${{ runner.os }}-${{ hashFiles('Scripts/windows_java_build/setup-deps.bat') }}
+
+      - name: Configure
+        shell: cmd
+        run: call Scripts\windows_java_build\configure.bat
+
+      - name: Build and install
+        shell: cmd
+        run: call Scripts\windows_java_build\build.bat
+
+      - name: Smoke test (JDK 21)
+        shell: pwsh
+        run: |
+          $dist = Join-Path $env:BUILDROOT 'java-dist'
+          $jar = Join-Path $dist 'org.RDKit.jar'
+          $out = Join-Path $env:RUNNER_TEMP 'smoke-classes'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $src = (Get-ChildItem Scripts\windows_java_build\smoke\*.java).FullName
+          & "$env:JDK21\bin\javac.exe" -d $out -cp $jar $src
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          foreach ($t in 'Smoke', 'InchiSmoke') {
+            & "$env:JDK21\bin\java.exe" "-Djava.library.path=$dist" -cp "$out;$jar" $t
+            if ($LASTEXITCODE -ne 0) { throw "$t failed" }
+          }
+
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'out'
+          New-Item -ItemType Directory -Force "$stage\java-dist" | Out-Null
+          Copy-Item "$env:BUILDROOT\java-dist\*" "$stage\java-dist\"
+          Compress-Archive -Path "$env:BUILDROOT\install\*" -DestinationPath "$stage\rdkit-windows-x64-install.zip"
+          Get-ChildItem -Recurse $stage | Where-Object { -not $_.PSIsContainer } |
+            ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.FullName.Substring($stage.Length + 1) }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rdkit-windows-x64
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+          retention-days: 30

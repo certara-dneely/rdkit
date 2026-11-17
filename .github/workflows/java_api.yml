@@ -1,0 +1,192 @@
+name: Java_API
+
+# The common Java API (org.RDKit.jar) and its packaging.
+#
+# The SWIG-generated Java API is built together with each platform's native library (CMake compiles the
+# wrapper and the jar in one go), so this workflow calls the four native workflows, then:
+#   1. compares the public API of the four jars (javap) and reports the differences in the job summary,
+#   2. smoke-tests the chosen "common" jar against the Linux native library,
+#   3. uploads the common jar + API reports (artifact rdkit-java-api),
+#   4. optionally publishes everything to JFrog as ONE Maven coordinate (org.rdkit:rdkit-java:<version>):
+#        plain jar = common jar; classifiers windows-x64 / linux-x86_64 / macos-arm64 / macos-x86_64, each with
+#        a jar, the native library (dll / so / dylib) and an *-install archive (C++ libs + headers).
+#
+# Why a "common" jar must be chosen: C++ `long` is 32-bit on Windows and 64-bit on Linux, so SWIG generates
+# `int use_count()` vs `long use_count()` (and a few differently named opaque SWIGTYPE_p_* classes) per platform.
+# Windows' variant is the safe default (an `int` signature works against every native library), but code
+# compiled against one jar fails with NoSuchMethodError on another: compile and run against the same jar.
+# The comparison step shows exactly what differs.
+on:
+  workflow_dispatch:
+    inputs:
+      jar_platform:
+        description: Which platform's jar becomes the plain (common) artifact
+        type: choice
+        options: [windows-x64, linux-x86_64, macos-arm64, macos-x86_64]
+        default: windows-x64
+      publish:
+        description: Publish to JFrog (needs JFROG_USERNAME / JFROG_ACCESS_TOKEN secrets)
+        type: boolean
+        default: false
+      version:
+        description: Maven version to publish (empty = RDKit version from CMakeLists.txt, e.g. 2026.09.2)
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      jar_platform:
+        type: string
+        default: windows-x64
+      publish:
+        type: boolean
+        default: false
+      version:
+        type: string
+        default: ""
+    secrets:
+      JFROG_USERNAME:
+        required: false
+      JFROG_ACCESS_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows_x64:
+    uses: ./.github/workflows/java_native_windows_x64.yml
+  linux_x86_64:
+    uses: ./.github/workflows/java_native_linux_x86_64.yml
+  macos_arm64:
+    uses: ./.github/workflows/java_native_macos_arm64.yml
+  macos_x86_64:
+    uses: ./.github/workflows/java_native_macos_x86_64.yml
+
+  assemble:
+    needs: [windows_x64, linux_x86_64, macos_arm64, macos_x86_64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      JAR_PLATFORM: ${{ inputs.jar_platform || 'windows-x64' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Work out the version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          cm=CMakeLists.txt
+          y=$(grep -F 'set(RDKit_Year' $cm | cut -d'"' -f2)
+          m=$(grep -F 'set(RDKit_Month' $cm | cut -d'"' -f2)
+          r=$(grep -F 'set(RDKit_Revision ' $cm | cut -d'"' -f2)
+          mod=$(grep -F 'set(RDKit_RevisionModifier' $cm | cut -d'"' -f2 || true)
+          v="$y.$m.$r"; [ -n "$mod" ] && v="$v-$mod"
+          [ -n "$INPUT_VERSION" ] && v="$INPUT_VERSION"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "Version: $v   (common jar: $JAR_PLATFORM)"
+
+      # Lay the artifacts out the way scripts/publish-jfrog.sh expects them under $BUILDROOT.
+      - name: Download native builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rdkit-*
+          path: ${{ runner.temp }}/artifacts
+
+      - name: Arrange files
+        run: |
+          A="$RUNNER_TEMP/artifacts"; B="$RUNNER_TEMP/rdkit"
+          mkdir -p "$B/linux" "$B/macos-arm64" "$B/macos-x86_64"
+          cp -r "$A/rdkit-windows-x64/."     "$B/"
+          cp -r "$A/rdkit-linux-x86_64/."    "$B/linux/"
+          cp -r "$A/rdkit-macos-arm64/."     "$B/macos-arm64/"
+          cp -r "$A/rdkit-macos-x86_64/."    "$B/macos-x86_64/"
+          echo "BUILDROOT=$B" >> "$GITHUB_ENV"
+          declare -A JARS=(
+            [windows-x64]="$B/java-dist/org.RDKit.jar"
+            [linux-x86_64]="$B/linux/java-dist/org.RDKit.jar"
+            [macos-arm64]="$B/macos-arm64/java-dist/org.RDKit.jar"
+            [macos-x86_64]="$B/macos-x86_64/java-dist/org.RDKit.jar" )
+          for p in "${!JARS[@]}"; do echo "JAR_${p//-/_}=${JARS[$p]}" >> "$GITHUB_ENV"; done
+          echo "MAIN_JAR=${JARS[$JAR_PLATFORM]}" >> "$GITHUB_ENV"
+          find "$B" -type f -not -path '*/install/*' | sort | xargs ls -l
+
+      - name: Compare the Java API of the platform jars
+        run: |
+          mkdir -p api
+          for p in windows-x64 linux-x86_64 macos-arm64 macos-x86_64; do
+            v="JAR_${p//-/_}"; jar="${!v}"
+            unzip -Z1 "$jar" | grep '\.class$' | sed 's/\.class$//; s#/#.#g' | sort > "api/$p.classes"
+            xargs -a "api/$p.classes" javap -p -cp "$jar" > "api/$p.txt"
+            echo "$p: $(wc -l < "api/$p.classes") classes, $(wc -l < "api/$p.txt") declarations"
+          done
+          {
+            echo "### Java API of each platform's jar vs the common jar (\`$JAR_PLATFORM\`)"
+            echo
+            echo "| platform | classes | declarations | differing lines vs common |"
+            echo "|---|---:|---:|---:|"
+            for p in windows-x64 linux-x86_64 macos-arm64 macos-x86_64; do
+              d=$(diff "api/$JAR_PLATFORM.txt" "api/$p.txt" | grep -c '^[<>]' || true)
+              echo "| $p | $(wc -l < "api/$p.classes") | $(wc -l < "api/$p.txt") | $d |"
+            done
+            for p in windows-x64 linux-x86_64 macos-arm64 macos-x86_64; do
+              [ "$p" = "$JAR_PLATFORM" ] && continue
+              if ! diff -q "api/$JAR_PLATFORM.txt" "api/$p.txt" > /dev/null; then
+                echo; echo "<details><summary>diff $JAR_PLATFORM vs $p</summary>"; echo
+                echo '```diff'; diff -u "api/$JAR_PLATFORM.txt" "api/$p.txt" | head -80; echo '```'; echo "</details>"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The common jar must work with the native libraries that get deployed: run it against the Linux one.
+      - name: Smoke test common jar + Linux native library
+        run: |
+          sudo apt-get install -y --no-install-recommends libfreetype6
+          out="$RUNNER_TEMP/smoke"; mkdir -p "$out"
+          javac -d "$out" -cp "$MAIN_JAR" Scripts/windows_java_build/smoke/*.java
+          for t in Smoke InchiSmoke; do
+            java -Djava.library.path="$BUILDROOT/linux/java-dist" -cp "$out:$MAIN_JAR" "$t"
+          done
+
+      - name: Stage common jar
+        run: |
+          mkdir -p out
+          cp "$MAIN_JAR" "out/rdkit-java-$VERSION.jar"
+          cp -r api out/api
+          sha256sum "out/rdkit-java-$VERSION.jar" | tee "out/rdkit-java-$VERSION.jar.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rdkit-java-api
+          path: out
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish to JFrog
+        if: ${{ inputs.publish }}
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+          JFROG_URL: ${{ vars.JFROG_MAVEN_URL || 'https://certara.jfrog.io/artifactory/certara-maven-develop-local' }}
+          JFROG_REPO_ID: certara-jfrog-admin
+        run: |
+          [ -n "$JFROG_USERNAME" ] && [ -n "$JFROG_ACCESS_TOKEN" ] \
+            || { echo "::error::secrets JFROG_USERNAME and JFROG_ACCESS_TOKEN are required to publish"; exit 1; }
+          mkdir -p ~/.m2
+          # credentials are read from the environment at deploy time, never written to disk
+          cat > ~/.m2/settings.xml <<'EOF'
+          <settings>
+            <servers>
+              <server>
+                <id>certara-jfrog-admin</id>
+                <username>${env.JFROG_USERNAME}</username>
+                <password>${env.JFROG_ACCESS_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+          bash Scripts/windows_java_build/publish-jfrog.sh
